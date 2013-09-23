@@ -1,0 +1,226 @@
+<?xml version="1.0" encoding="utf-8"?>
+<s:WindowedApplication xmlns:fx="http://ns.adobe.com/mxml/2009" 
+					   xmlns:s="library://ns.adobe.com/flex/spark" 
+					   xmlns:mx="library://ns.adobe.com/flex/mx"
+					   backgroundColor="0x666666" width="600" height="500"
+					   creationComplete="init()" xmlns:ns="http://flex.apache.org/experimental/ns">
+	<fx:Script>
+		<![CDATA[
+			import flash.desktop.NativeProcess;
+			import flash.desktop.NativeProcessStartupInfo;
+			import flash.events.IOErrorEvent;
+			import flash.events.MouseEvent;
+			import flash.events.NativeProcessExitEvent;
+			import flash.events.ProgressEvent;
+			import flash.filesystem.File;
+			
+			import mx.collections.ArrayCollection;
+			
+			import spark.events.IndexChangeEvent;
+		
+			private var nativeProcess:NativeProcess;
+			private var nativeProcessStartupInfo:NativeProcessStartupInfo;
+			private var selectedVideoInput:String;
+			private var selectedAudioInput:String;
+			private var collectedInputsData:String;
+			
+			[Bindable] public var videoDevices:ArrayCollection = new ArrayCollection();
+			[Bindable] public var audioDevices:ArrayCollection = new ArrayCollection();
+			
+			public function init():void {
+				nativeProcess = new NativeProcess();
+				nativeProcessStartupInfo = new NativeProcessStartupInfo();
+				
+				var bin:File = File.applicationDirectory;
+				bin = bin.resolvePath("bin/ffmpeg.exe");
+				nativeProcessStartupInfo.executable = bin;
+				
+				var dir:File = File.documentsDirectory.resolvePath("Camera Recordings"); 
+				dir.createDirectory();
+				
+				nativeProcess.addEventListener(IOErrorEvent.STANDARD_OUTPUT_IO_ERROR, onIOError);
+				nativeProcess.addEventListener(IOErrorEvent.STANDARD_ERROR_IO_ERROR, onIOError);
+				
+				collectedInputsData = "";
+				
+				getInputs();
+			}
+			
+			public function getInputs():void {
+				var processArgs:Vector.<String> = new Vector.<String>();
+				processArgs.push("-list_devices");
+				processArgs.push("true");
+				processArgs.push("-f");
+				processArgs.push("dshow");
+				processArgs.push("-i");
+				processArgs.push("dummy");
+				
+				nativeProcess.addEventListener(ProgressEvent.STANDARD_OUTPUT_DATA, onInputsData);
+				nativeProcess.addEventListener(ProgressEvent.STANDARD_ERROR_DATA, onInputsData);
+				nativeProcess.addEventListener(NativeProcessExitEvent.EXIT, onInputsExit);
+				
+				nativeProcessStartupInfo.arguments = processArgs;
+				
+				nativeProcess.start(nativeProcessStartupInfo);
+			}
+			
+			public function onInputsData(e:ProgressEvent):void {
+				var m:String = nativeProcess.standardError.readUTFBytes(nativeProcess.standardError.bytesAvailable);
+				collectedInputsData = collectedInputsData + m;
+			}
+			
+			public function onInputsExit(e:NativeProcessExitEvent):void {
+				nativeProcess.removeEventListener(ProgressEvent.STANDARD_OUTPUT_DATA, onInputsData);
+				nativeProcess.removeEventListener(ProgressEvent.STANDARD_ERROR_DATA, onInputsData);
+				nativeProcess.removeEventListener(NativeProcessExitEvent.EXIT, onInputsExit);
+				
+				var pattern:RegExp = new RegExp('".*?"');
+				var s:String = collectedInputsData; 
+				var a:Array = s.split("[");
+				var videoStart:int = 0;
+				var audioStart:int = 0;
+				
+				
+				//find video index
+				for(var i:int=0; i<a.length; i++){
+					if(a[i].indexOf("DirectShow video devices") != -1){
+						videoStart = i;
+						break;
+					}
+				}
+				
+				//find audio index
+				for(var j:int=0; j<a.length; j++){
+					if(a[j].indexOf("DirectShow audio devices") != -1){
+						audioStart = j;
+						break;
+					}
+				}
+				
+				// add devices to arrays
+				for(var k:int=videoStart+1; k<audioStart; k++){
+					if(a[k].indexOf("\"")){
+						var vstr:String = pattern.exec(a[k]);
+						vstr = vstr.substr(1, vstr.length-2);
+						videoDevices.addItem({"name":vstr});
+					}
+				}
+				
+				for(var l:int=audioStart+1; l<a.length; l++){
+					if(a[l].indexOf("\"")){
+						var astr:String = pattern.exec(a[l]);
+						astr = astr.substr(1, astr.length-2);
+						audioDevices.addItem({"name":astr});
+					}
+				}
+			}
+			
+			protected function videoSelected(e:IndexChangeEvent):void{
+				selectedVideoInput = e.target.selectedItem.name;
+			}
+			
+			protected function audioSelected(e:IndexChangeEvent):void{
+				selectedAudioInput = e.target.selectedItem.name;
+			}
+			
+			
+			
+			
+			
+			
+			public function beginCapture(e:MouseEvent):void {
+				var a:String = "";
+				var processArgs:Vector.<String> = new Vector.<String>();
+				
+				//processArgs.push("-r");
+				//processArgs.push("15");
+				
+				processArgs.push("-f");
+				processArgs.push("dshow");
+				
+				//processArgs.push("-s");
+				//processArgs.push("640x480");
+				
+				//processArgs.push("-c:v");
+				//processArgs.push("mjpeg");
+				
+				processArgs.push("-i");
+				processArgs.push("video="+selectedVideoInput+":audio="+selectedAudioInput);
+				
+				var today:Date = new Date();
+				var recName:String = "rec_" + today.getFullYear() + "" + today.getMonth() + "" + today.getDate() + "-" + today.getHours() + "" + today.getMinutes() + "" + today.getSeconds();
+				
+				
+				var dir:File = File.documentsDirectory.resolvePath("Camera Recordings");
+				processArgs.push(dir.nativePath + "\\" + recName+".mp4");
+				
+				nativeProcess.addEventListener(ProgressEvent.STANDARD_OUTPUT_DATA, onCaptureData);
+				nativeProcess.addEventListener(ProgressEvent.STANDARD_ERROR_DATA, onCaptureData);
+				nativeProcess.addEventListener(NativeProcessExitEvent.EXIT, onCaptureExit);
+				
+				nativeProcessStartupInfo.arguments = processArgs;
+				
+				nativeProcess.start(nativeProcessStartupInfo);
+				
+			}
+			
+			public function onCaptureData(e:ProgressEvent):void {
+				if(nativeProcess.standardError.bytesAvailable > 0){
+					consoleText.appendText(nativeProcess.standardError.readUTFBytes(nativeProcess.standardError.bytesAvailable));
+				}
+				if(nativeProcess.standardOutput.bytesAvailable > 0){
+					consoleText.appendText(nativeProcess.standardOutput.readUTFBytes(nativeProcess.standardOutput.bytesAvailable)); 
+				}
+			}
+			
+			public function onCaptureExit(e:NativeProcessExitEvent):void {
+				consoleText.appendText("Process exited with " + e.exitCode);
+			}
+			
+			
+			
+			
+			
+			
+			
+			
+			
+			
+			public function onIOError(e:IOErrorEvent):void {
+				trace(nativeProcess.toString());
+			}
+			
+			
+			public function endCapture(e:MouseEvent):void {
+				nativeProcess.standardInput.writeUTF("q");
+			}
+
+	
+			
+			
+			protected function openFolder(event:MouseEvent):void {
+				var dir:File = File.documentsDirectory.resolvePath("Camera Recordings");
+				dir.openWithDefaultApplication();
+			}
+			
+		]]>
+	</fx:Script>
+	
+	<s:Group top="20" bottom="20" left="20" right="20" >
+		<s:Label top="0" left="0" text="Select Video Input"/>
+		<s:DropDownList top="20" left="0" right="150" id="videoList" prompt="Select one..." dataProvider="{videoDevices}" change="videoSelected(event)" labelField="name"/>
+		
+		<s:Label top="60" left="0" text="Select Audio Input"/>
+		<s:DropDownList top="80" left="0" right="150" id="audioList" prompt="Select one..." dataProvider="{audioDevices}" change="audioSelected(event)" labelField="name"/>
+		
+		<s:Spacer height="10"/>
+		
+		<s:Button label="Start Capture" top="0" right="0" width="120" click="beginCapture(event)"/>
+		<s:Button label="Stop Capture" top="30" right="0" width="120" click="endCapture(event)"/>
+		<s:Button label="Open Folder" top="80" right="0" width="120" click="openFolder(event)"/>
+		
+		<s:TextArea id="consoleText" top="200" left="0" right="0" bottom="0" />
+		
+	</s:Group>
+	
+</s:WindowedApplication>
